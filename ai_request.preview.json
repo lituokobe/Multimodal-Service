@@ -1,0 +1,83 @@
+﻿{
+  "task_id": "task_20260417_0001",
+  "request_id": "req_demo_001",
+  "task": {
+    "brief": "做一个北京车展促销短视频任务，轻松欢快，突出今天最后7小时免费领票和新能源车型齐全。",
+    "video_count": 4,
+    "aspect_ratio": "9:16",
+    "duration_sec": 18,
+    "audience": "准备购车的城市家庭用户",
+    "language": "zh",
+    "must_include": [
+      "今天最后7小时免费领票",
+      "新能源车型齐全",
+      "点击报名"
+    ],
+    "avoid": [
+      "过于严肃",
+      "长段落密集文字"
+    ]
+  },
+  "candidates": {
+    "videos": [
+      {
+        "id": "video_101",
+        "name": "车展现场人流",
+        "description": "车展入口和展馆内的人流画面，热闹、促销感强",
+        "tags": ["车展", "热闹", "促销"]
+      },
+      {
+        "id": "video_102",
+        "name": "新能源车型特写",
+        "description": "新能源展车近景，科技感、质感强",
+        "tags": ["新能源", "科技感"]
+      }
+    ],
+    "voices": [
+      {
+        "id": "voice_201",
+        "name": "女声促销版",
+        "description": "明亮年轻女声，适合促销广告",
+        "tags": ["女声", "活泼"]
+      },
+      {
+        "id": "voice_202",
+        "name": "男声科技版",
+        "description": "年轻男声，适合新能源科技感视频",
+        "tags": ["男声", "科技感"]
+      }
+    ],
+    "bgms": [
+      {
+        "id": "bgm_301",
+        "name": "轻快电子",
+        "description": "节奏轻快，适合促销活动和车展",
+        "tags": ["电子", "促销"]
+      },
+      {
+        "id": "bgm_302",
+        "name": "潮流科技",
+        "description": "更偏新能源科技展示的时尚电子音乐",
+        "tags": ["科技", "电子"]
+      }
+    ],
+    "templates": [
+      {
+        "id": "tpl_401",
+        "name": "橙色车展促销模板",
+        "description": "橙色贴纸风，适合促销、抢票、限时信息。模板包含活动名称、主标题、副标题、行动按钮四个文字位。",
+        "tags": ["橙色", "促销", "贴纸风"]
+      }
+    ],
+    "subtitle_styles": [
+      {
+        "id": "sub_501",
+        "name": "橙色字幕",
+        "description": "橙色主字，深色描边，适合促销视频",
+        "tags": ["橙色", "促销"]
+      }
+    ]
+  },
+  "response_schema_note": "请严格返回 AIResponsePayload 结构，不要返回额外文本。task_id 必须原样回传。results 必须返回 video_count 条。每条 result 里每种素材类型都允许返回多个 id。"
+}
+
