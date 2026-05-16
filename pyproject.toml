@@ -1,24 +1,43 @@
 [project]
-name = "embedding-service-multimodal"
+name = "multimodal-service"
 version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.13"
+description = "Qwen3.5-9B multimodal and related description service"
+requires-python = ">=3.11"
 dependencies = [
-    "av>=17.0.1",
-    "decord>=0.6.0",
-    "langchain>=1.2.15",
-    "langchain-openai>=1.1.14",
+    "torch==2.10.0+cu128",
+    "torchvision==0.25.0+cu128",
+    "torchaudio==2.10.0+cu128",
+    "vllm==0.17.1",
+    "langchain>=1.2.16",
+    "langchain-openai>=1.1.10",
     "modelscope>=1.35.4",
     "opencv-python>=4.13.0.92",
-    "qwen-vl-utils>=0.0.14",
-    "transformers>=5.5.4",
-    # Removed "+cu128" suffix. uv will automatically pick the CUDA 12.8 wheel
-    # via the extra-index-url configured below.
-    "torch==2.11.0",
-    "torchvision==0.26.0",
-    "torchaudio==2.11.0",
+    "transformers>=4.57.6",
+    "matplotlib>=3.10.9",
+    "einops>=0.8.2",
+    "fastapi>=0.136.0",
+    "uvicorn>=0.44.0",
+    "xformers>=0.0.35"
 ]
 
 [tool.uv]
-# Point uv to PyTorch's CUDA 12.8 wheel repository
-extra-index-url = ["https://download.pytorch.org/whl/cu128"]
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'"
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true  # ✅ Critical: ONLY search this index for packages listed above
+
+# 🇨🇳 Primary mirror (Tsinghua)
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true  # ✅ Use as default for non-explicit packages
+

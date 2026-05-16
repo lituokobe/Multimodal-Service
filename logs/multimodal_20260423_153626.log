@@ -1,2 +1,0 @@
-2026-04-23 15:36:48,474 - _client - INFO: HTTP Request: POST http://localhost:8000/v1/chat/completions "HTTP/1.1 200 OK"
-2026-04-23 15:36:48,487 - multimodal_summarization - INFO: E:\Li_Tuo_work\embedding_service_multimodal\images\first_frame_20260302_143926.png总结完成，耗时21.23秒。

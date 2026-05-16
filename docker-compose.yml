@@ -1,0 +1,49 @@
+services:
+  multimodal_summarization:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: multimodal_summarization:latest
+    container_name: multimodal_summarization
+    hostname: company-internal-server-gpu
+    runtime: nvidia  # Only this service needs GPU
+    ipc: host  # ← Critical for tensor parallelism & zero-copy transfers
+    deploy:
+      resources:
+        reservations:
+          devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OMP_NUM_THREADS=2
+      - TOKENIZERS_PARALLELISM=false
+      - VLLM_BASE_URL=http://localhost:8012/v1
+      - STAGING_DIR=/app/staging
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./entrypoint.sh:/app/entrypoint.sh:ro
+      - ./staging:/app/staging:rw
+      - ./multimodal_summarization.py:/app/multimodal_summarization.py:ro
+      - ./config:/app/config:ro
+      - ./functionals:/app/functionals:ro
+      - ./models:/app/models:ro,cached
+      - ./logs:/app/logs:rw
+    ports:
+      - "8010:8010"
+      - "8012:8012"
+    command: [ "/bin/bash", "/app/entrypoint.sh" ]
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8010/health" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 600s
+    restart: unless-stopped
+    networks:
+      - llm-net
+
+networks:
+  llm-net:
+    driver: bridge

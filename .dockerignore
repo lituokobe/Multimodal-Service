@@ -1,0 +1,17 @@
+# .dockerignore
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+.venv
+.env
+*.log
+logs/
+*.git*
+.idea/
+.vscode/
+*.md
+Dockerfile
+docker-compose*.yml
+!models/Qwen/Qwen3___5-9B/**

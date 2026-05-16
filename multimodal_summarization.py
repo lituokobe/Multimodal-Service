@@ -1,207 +1,256 @@
-# This file is to use multimodal LLM to understand video footage and output structured messages.
+"""
+This file is to use multimodal LLM to understand video footage and image, and output structured description.
+"""
 
 # ========= Import dependencies =========
+import os
 import time
+from datetime import datetime
+from contextlib import asynccontextmanager
+from pathlib import Path
+import asyncio
+import torch
+from fastapi import FastAPI, HTTPException
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from pydantic import ValidationError
-from config.path_config import MULTIMODAL_LLM_URL
-from config.schema_config import FootageSummary
+from config.constant_config import MAX_RETRY, IMAGE_SUMMARY_PROMPT, FOOTAGE_SUMMARY_PROMPT
+from config.path_config import MULTIMODAL_LLM_URL, STAGING_DIR
+from config.schema_config import ImageSummary, FootageSummary, SummarizeImageRequest, SummarizeFootageRequest, \
+    APIResponse
 from functionals.logger import multimodal_logger
 from functionals.utils import video_to_data_url, extract_json_block, get_video_duration, format_timestamp, \
-    image_to_data_url, clean_image_summary
+    image_to_data_url, clean_image_summary, is_url, download_file_from_url
 
-# ========= Initialize LangChain client =========
-multimodal_llm = ChatOpenAI(
-    model="qwen3.5-9b",  # Must match the model name vLLM registered
-    base_url=MULTIMODAL_LLM_URL,  # Your local vLLM endpoint
-    api_key="empty",  # vLLM doesn't require auth for local deployment
-    temperature=0,
-    max_tokens=8192,  # max output tokens. Note: vLLM uses max_tokens, not max_completion_tokens
-)
+# ========= APIs =========
+multimodal_llm = None
 
-# ========= Prepare the summary prompt =========
-IMAGE_SUMMARY_PROMPT = """
-你是一名专业的商业图片描述师。请仔细观察输入的图片，用200字以内输出一段清晰、实用的描述，适合用于平面设计或视频制作参考。
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model once at startup, clean up on shutdown."""
+    global multimodal_llm
+    multimodal_logger.info("🔧 正在加载 Qwen3.5 模型...")
+    start = time.time()
 
-【输出要求】
-- 请仅在内部进行分步思考，最终输出时只返回200字以内的纯文本描述
-- 不要输出任何分析过程、步骤编号、标题、markdown符号（如**、#、-）
-- 不要使用空行分隔，各部分用句号或分号自然连接
-- 直接开始描述主题，无需前缀
-- 用平实、专业的中文输出，避免主观评价（如“很好看”），只描述客观事实与明确指向的用途建议。
-
-【内容要求】
-描述需按以下顺序包含：
-- 主题：图片的核心内容（人物/风景/品牌/产品/文字图形等）
-- 背景与环境：场景、空间感、细节
-- 文字信息：如有文字，逐字抄录并说明字体风格（如无，略过）
-- 颜色与色调：主色、辅色、整体冷暖/明暗倾向
-- 构图与光影：主体位置、视觉焦点、光线方向与质感
-- 风格与感觉：视觉风格（如极简、复古、科技感）及情绪基调
-- 商业适用场景：适合用于哪类平面设计（海报、广告、包装等）或视频制作（片头、转场、背景、宣传片等），并简述原因
-
-现在，请根据要求描述图片。
-"""
-
-FOOTAGE_SUMMARY_PROMPT = """
-你是一个专业的视频内容分析员。请仔细观看输入视频，按镜头切换或内容主题明显变化进行分段，并输出严格符合以下JSON格式的分析结果。所有描述必须使用中文，JSON键名使用英文。
-
-【分段规则】
-- 以镜头切换、场景变更或视觉主题明显变化为界进行分段。
-- 时间戳格式统一为 "HH:MM:SS.mmm"（例如 "00:00:00.000"）。
-- 片段时间必须连续，首片段从 "00:00:00.000" 开始。
-- 视频总时长为{footage_duration}秒，（格式化后: {footage_duration_formatted}）请确保所有时间戳不超过此值，末片段结束时间等于此值。
-- 若视频没有主题变换或极短（<1秒），仅输出1个片段即可。
-- 
-
-【字段要求】
-segments 数组中每个对象包含：
-- "start": 片段起始时间
-- "end": 片段结束时间
-- "shot_type": 镜头类型（如：俯拍、仰拍、近景、中景、远景、特写、跟拍、摇镜头、固定机位等）
-- "scene": 场景描述（室内/室外、天气/光线、背景布局/关键道具），**请尽量包含显著可见的品牌（尽量使用中文）产品/文字，忽略背景中模糊、过小（<画面1/20）、快速闪过的文字**
-- "subject": 主体信息（人物/动物/物体/无主体，可补充数量、身份或显著特征）
-- "action": 主体动作或事件进展
-- "emotion_vibe": 画面传递的情绪、氛围或视觉风格（如：科技感、温馨、紧张、风驰电掣、高级感等）
-- "description": 一段连贯的简述，整合上述信息，适合营销素材检索与AI视频生成参考，**请尽量包含显著可见的品牌（尽量使用中文）/产品/文字，忽略背景中模糊、过小（<画面1/20）、快速闪过的文字**（≤100字）
-
-最后附加：
-- "overall_summary": 1-2句中文总结全片核心内容，并指出适合的营销方向或产品品类，**请尽量包含显著可见的品牌（尽量使用中文）产品/文字，忽略背景中模糊、过小（<画面1/20）、快速闪过的文字**（≤100字）
-
-【输出要求】
-- 仅输出合法JSON，严禁使用Markdown代码块包裹，严禁附加任何解释性文字。
-- 确保时间逻辑连贯、描述精炼准确、键名与示例完全一致。
-- 示例结构：
-{{
-  "segments": [
-    {{
-      "start": "00:00:00.000",
-      "end": "00:00:03.500",
-      "shot_type": "俯拍",
-      "scene": "室外沙滩，正午强光，布局开阔",
-      "subject": "多名中学生",
-      "action": "激烈进行沙滩排球比赛",
-      "emotion_vibe": "青春活力、激情",
-      "description": "俯拍正午沙滩，一群中学生激烈打排球，画面充满青春张力。"
-    }},
-    {{
-      "start": "00:00:03.500",
-      "end": "00:00:08.200",
-      "shot_type": "近景跟拍",
-      "scene": "沙滩与棕榈树交界，光线柔和",
-      "subject": "一名擦汗的男生",
-      "action": "暂停休息，喘息擦汗",
-      "emotion_vibe": "疲惫但专注",
-      "description": "近景捕捉一名男生擦汗休息，突出运动后的真实质感。"
-    }}
-  ],
-  "overall_summary": "沙滩排球少年与休息特写交替，适合运动饮料、户外服饰或快消品广告素材。"
-}}
-"""
-
-# ========= Define the functions =========
-def summarize_image(image_path: str,
-                    multimodal_llm:ChatOpenAI = multimodal_llm,
-                    max_retries: int = 2) -> str|None:
-    """
-    Summarize image to natural language text with multimodal_llm.
-    :param image_path: the path of image
-    :param multimodal_llm: multimodal_llm to understand the video, by default Qwen3.5
-    :param max_retries: maximum number of retries
-    :return: string of summary or nothing if error happens
-    """
-    message=HumanMessage(content=[
-        {"type": "image_url", "image_url": {"url": image_to_data_url(image_path)}},
-        {"type": "text", "text": IMAGE_SUMMARY_PROMPT}
-    ])
-
-    for attempt in range(max_retries):
-        try:
-            # Invoke model
-            start_time = time.time()
-            response = multimodal_llm.invoke([message])
-            image_summary = response.content
-            latency = round(time.time()-start_time,2)
-
-            multimodal_logger.info(f"{image_path}总结完成，耗时{latency}秒。")
-
-            if not isinstance(image_summary, str):
-                multimodal_logger.error(f"未能总结图片{image_path}")
-                return None
-            # Validate against schema
-            return clean_image_summary(image_summary)
-
-        except Exception as e:
-            multimodal_logger.error(f"第{attempt + 1}/{max_retries}次总结图片{image_path}，报错: {e}")
-            if attempt < max_retries:
-                time.sleep(0.1)
-                continue
-            return None
-
-def summarize_footage(footage_path: str,
-                      multimodal_llm:ChatOpenAI = multimodal_llm,
-                      footage_summary_prompt: str = FOOTAGE_SUMMARY_PROMPT,
-                      max_retries: int = 2) -> FootageSummary|None:
-    """
-    Summarize video footage to natural language text by multimodal_llm.
-    :param footage_path: the path of video footage
-    :param multimodal_llm: multimodal_llm to understand the video, by default Qwen3.5
-    :param footage_summary_prompt: instruction to output
-    :param max_retries: maximum number of retries
-    :return: the data in the format of FootageSummary or nothing if error happens
-    """
-    # Prepare the prompt message
-    footage_data_url = video_to_data_url(footage_path)
-    footage_duration = get_video_duration(footage_path)
-    footage_duration_formatted = format_timestamp(footage_duration)
-
-    footage_summary_prompt_formated = footage_summary_prompt.format(
-        footage_duration=footage_duration,
-        footage_duration_formatted=footage_duration_formatted
+    multimodal_llm = ChatOpenAI(
+        model="qwen3.5-9b",  # Must match the model name vLLM registered
+        base_url=MULTIMODAL_LLM_URL,  # Your local vLLM endpoint
+        api_key="empty",  # vLLM doesn't require auth for local deployment
+        temperature=0,
+        max_tokens=8192,  # max output tokens. Note: vLLM uses max_tokens, not max_completion_tokens
     )
 
-    message=HumanMessage(content=[
-        {"type": "video_url", "video_url": {"url": footage_data_url}},
-        {"type": "text", "text": footage_summary_prompt_formated}
-    ])
+    multimodal_logger.info(f"✅ Qwen3.5-9B 模型加载成功，耗时{time.time() - start:.2f}秒")
+    yield
+    # Cleanup: release GPU memory
+    if multimodal_llm is not None:
+        del multimodal_llm
+        torch.cuda.empty_cache()
+        multimodal_logger.info("🧹 Qwen3.5-9B 模型 GPU 显存释放")
 
-    for attempt in range(max_retries):
-        try:
-            # Invoke model
-            start_time = time.time()
-            response = multimodal_llm.invoke([message])
-            raw_output = response.content
-            latency = round(time.time()-start_time,2)
+app = FastAPI(
+    title="Multimodal Summarization API",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url=None
+)
 
-            multimodal_logger.info(f"{footage_path}总结完成，耗时{latency}秒。")
+@app.post("/summarize_image", response_model=APIResponse[ImageSummary])
+async def summarize_image(request: SummarizeImageRequest) -> APIResponse[ImageSummary]:
+    """Summarize image to natural language text with multimodal_llm."""
+    staged_file = None
+    try:
+        # ------ Check if input is URL or local path --------
+        if is_url(request.image_path):
+            # Download from URL
+            staged_file = download_file_from_url(request.image_path, STAGING_DIR)
+        else:
+            # Use local file in staging directory
+            staged_file = STAGING_DIR / request.image_path
 
-            parsed_json = extract_json_block(raw_output)
-            if not parsed_json:
-                multimodal_logger.error(f"未能从{footage_path}总结内容中提取JSON")
-                return None
-            # Validate against schema
-            return FootageSummary(**parsed_json)
+        # ------ Create and validate image path --------
+        if not staged_file.exists():
+            e_m = f"图片文件在容器的staging路径中不存在: {staged_file}"
+            multimodal_logger.error(e_m)
+            return APIResponse[ImageSummary].fail(e_m, error_code="FILE_NOT_FOUND")
+        if not staged_file.is_file():
+            e_m = f"图片文件无效:{staged_file}"
+            multimodal_logger.error(e_m)
+            return APIResponse[ImageSummary].fail(e_m, error_code="FILE_INVALID")
 
-        except ValidationError as e:
-            multimodal_logger.error(f"第{attempt + 1}/{max_retries}次总结视频{footage_path}，schema矫正报错: {e}")
-            if attempt<max_retries:
-                time.sleep(0.1)
-                continue
-        except Exception as e:
-            multimodal_logger.error(f"第{attempt + 1}/{max_retries}次总结视频{footage_path}，报错: {e}")
-            if attempt < max_retries:
-                time.sleep(0.1)
-                continue
-            return None
+        # ------ Describe the image --------
+        message=HumanMessage(content=[
+            {"type": "image_url", "image_url": {"url": image_to_data_url(staged_file)}},
+            {"type": "text", "text": IMAGE_SUMMARY_PROMPT}
+        ])
+
+        image_summary = None
+
+        for attempt in range(MAX_RETRY):
+            try:
+                # Invoke model
+                start_time = time.time()
+                response = multimodal_llm.invoke([message])
+                image_summary = response.content
+
+                latency = round(time.time()-start_time,2)
+                multimodal_logger.info(f"{staged_file}总结完成，耗时{latency}秒。")
+
+                if not isinstance(image_summary, str):
+                    e_m = f"未能总结图片{staged_file}"
+                    multimodal_logger.error(e_m)
+                    return APIResponse[ImageSummary].fail(e_m , error_code="SUMMARY_INVALID")
+
+            except Exception as e:
+                e_m = f"第{attempt + 1}/{MAX_RETRY}次总结图片{staged_file}，报错: {e}"
+                multimodal_logger.error(e_m )
+                if attempt < (MAX_RETRY-1):
+                    await asyncio.sleep(0.1)
+                    continue
+                return APIResponse[ImageSummary].fail(e_m , error_code="LLM_INFERENCE_FAILED")
+
+        return APIResponse.ok(
+            data=ImageSummary(overall_summary=clean_image_summary(image_summary))
+        )
+
+    except Exception as e:
+        e_m = f"图片描述失败: {e}"
+        multimodal_logger.error(e_m)
+        return APIResponse[ImageSummary].fail(e_m, error_code="LLM_INTERNAL_ERROR")
+
+    finally:
+        # 🔥 Guaranteed cleanup
+        if staged_file and Path(staged_file).exists():
+            try:
+                if os.access(staged_file, os.W_OK):
+                    Path(staged_file).unlink()
+                    multimodal_logger.debug(f"清理: {staged_file}")
+            except Exception as e:
+                multimodal_logger.warning(f"{staged_file} 清理失败: {e}")
+
+@app.post("/summarize_footage", response_model=APIResponse[FootageSummary])
+async def summarize_footage(request: SummarizeFootageRequest) -> APIResponse[FootageSummary]:
+    """Summarize footage to structured output with natural language text with multimodal_llm."""
+    staged_file = None
+    try:
+        # ------ Check if input is URL or local path --------
+        if is_url(request.footage_path):
+            # Download from URL
+            staged_file = download_file_from_url(request.footage_path, STAGING_DIR)
+        else:
+            # Use local file in staging directory
+            staged_file = STAGING_DIR / request.footage_path
+
+        # ------ Create and validate footage path --------
+        if not staged_file.exists():
+            e_m = f"视频素材文件在容器的staging路径中不存在: {staged_file}"
+            multimodal_logger.error(e_m)
+            return APIResponse[FootageSummary].fail(e_m, error_code="FILE_NOT_FOUND")
+        if not staged_file.is_file():
+            e_m = f"视频素材文件无效:{staged_file}"
+            multimodal_logger.error(e_m)
+            return APIResponse[FootageSummary].fail(e_m, error_code="FILE_INVALID")
+
+        # ------ prepare the dynamic prompt for the summarization --------
+        footage_duration = get_video_duration(staged_file)
+        footage_duration_formatted = format_timestamp(footage_duration)
+
+        footage_summary_prompt_formated = FOOTAGE_SUMMARY_PROMPT.format(
+            footage_duration=footage_duration,
+            footage_duration_formatted=footage_duration_formatted
+        )
+
+        # ------ Describe the footage --------
+        message=HumanMessage(content=[
+            {"type": "video_url", "video_url": {"url": video_to_data_url(staged_file)}},
+            {"type": "text", "text": footage_summary_prompt_formated}
+        ])
+
+        parsed_json = {}
+
+        for attempt in range(MAX_RETRY):
+            try:
+                # Invoke model
+                start_time = time.time()
+                response = multimodal_llm.invoke([message])
+                raw_output = response.content
+                latency = round(time.time()-start_time,2)
+
+                multimodal_logger.info(f"{staged_file}总结完成，耗时{latency}秒。")
+
+                parsed_json = extract_json_block(raw_output)
+                if not parsed_json:
+                    e_m = f"未能从{staged_file}的总结内容中提取JSON。raw_output:{raw_output}"
+                    multimodal_logger.error(e_m)
+                    return APIResponse[FootageSummary].fail(e_m, error_code="SUMMARY_INVALID")
+
+            except Exception as e:
+                e_m = f"第{attempt + 1}/{MAX_RETRY}次总结视频{staged_file}，报错: {e}"
+                multimodal_logger.error(e_m)
+                if attempt < (MAX_RETRY-1):
+                    await asyncio.sleep(0.1)
+                    continue
+                return APIResponse[FootageSummary].fail(e_m, error_code="LLM_INFERENCE_FAILED")
+
+        return APIResponse.ok(
+            data=FootageSummary(**parsed_json)
+        )
+
+    except Exception as e:
+        e_m = f"视频素材描述失败: {e}"
+        multimodal_logger.error(e_m)
+        return APIResponse[FootageSummary].fail(e_m, error_code="LLM_INTERNAL_ERROR")
+
+    finally:
+        # 🔥 Guaranteed cleanup
+        if staged_file and Path(staged_file).exists():
+            try:
+                if os.access(staged_file, os.W_OK):
+                    Path(staged_file).unlink()
+                    multimodal_logger.debug(f"清理: {staged_file}")
+            except Exception as e:
+                multimodal_logger.warning(f"{staged_file} 清理失败: {e}")
+
+@app.get("/health")
+async def health_check():
+    """Production health check endpoint [[30]]."""
+    if multimodal_llm is None:
+        raise HTTPException(status_code=503, detail="Qwen3.5 模型未加载")
+    return {
+        "status": "healthy",
+        "model": "Qwen3.5",
+        "timestamp": datetime.now().isoformat()
+    }
+
 
 # ========= Test =========
 if __name__ == "__main__":
-    # result1 = summarize_footage(r"E:\Li_Tuo_work\multimodal_service\video_footage\229275_tiny.mp4")
-    # print(result1)
 
-    result2 = summarize_image(r"/\images\first_frame_20260302_145412.png")
-    print(result2)
+    print("Test starts.")
+
+    # # video summary
+    # result1 = summarize_footage(SummarizeFootageRequest(footage_path=r"E:\Li_Tuo_work\multimodal_service\video_footage\229275_tiny.mp4"))
+    # print(result1)
+    #
+    # # image (design) summary
+    # result2 = []
+    # for img in [
+    #     r"E:\Li_Tuo_work\multimodal_service\images\雄安智能工业展.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\梅州茶道节.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\重庆火锅节.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\钦州母婴展.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\呼和浩特大型边境商业展.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\重庆火锅节.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\保定大学生赛跑.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\科技感.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\动感.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\科技大气.png",
+    #     r"E:\Li_Tuo_work\multimodal_service\images\可爱俏皮.png",
+    # ]:
+    #     res = summarize_image(SummarizeImageRequest(image_path=img))
+    #     result2.append(res)
+    #
+    # print(result2)
 
 # ========= Test with text =========
 # text_response = llm.invoke("Type \"I love Qwen3.5\" backwards")

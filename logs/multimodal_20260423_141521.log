@@ -1,5 +1,0 @@
-2026-04-23 14:15:22,010 - qwen3_vl_embedding - INFO: The device for multimodal embedding is cuda
-2026-04-23 14:15:27,104 - multimodal_embedding - INFO: '热闹的会展现场有很多人在看车'嵌入完成，耗时0.74秒。
-2026-04-23 14:15:27,239 - multimodal_embedding - INFO: '一个男孩在玩两个恐龙玩具'嵌入完成，耗时0.13秒。
-2026-04-23 14:15:27,374 - multimodal_embedding - INFO: '一个小男孩在游乐场一个人玩一个恐龙玩具'嵌入完成，耗时0.13秒。
-2026-04-23 14:15:27,506 - multimodal_embedding - INFO: '几个女生在机场'嵌入完成，耗时0.13秒。

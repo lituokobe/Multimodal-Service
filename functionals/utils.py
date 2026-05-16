@@ -2,8 +2,80 @@ import os
 import json
 import re
 import base64
+import uuid
+import requests
+from pathlib import Path
+from urllib.parse import urlparse
 import cv2
 from functionals.logger import multimodal_logger
+
+def is_url(path: str) -> bool:
+    """Check if path is a URL."""
+    return path.startswith(('http://', 'https://', 'ftp://'))
+
+def download_file_from_url(url: str, staging_dir: Path|str) -> Path|None:
+    """Download file from URL to staging directory using urllib (no external deps)."""
+    if isinstance(staging_dir, str):
+        staging_dir = Path(staging_dir)
+
+    local_path = None  # Initialize to avoid scope issues
+
+    try:
+        # Generate unique filename
+        parsed = urlparse(url)
+        original_filename = Path(parsed.path).name or f"download_{uuid.uuid4().hex[:8]}"
+
+        # Determine extension from URL
+        if '.' not in original_filename:
+            if 'image' in url.lower() or any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                original_filename += '.jpg'
+            elif 'video' in url.lower() or any(url.lower().endswith(ext) for ext in ['.mp4', '.mov', '.avi']):
+                original_filename += '.mp4'
+            else:
+                original_filename += '.bin'
+
+        local_path = staging_dir / original_filename
+        multimodal_logger.info(f"📥 从该URL下载: {url}")
+        multimodal_logger.info(f"📁 保存到: {local_path}")
+
+        # 🔑 CRITICAL: Add User-Agent header to avoid 403 errors
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8',
+            'Referer': f'https://{parsed.netloc}/',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'same-origin',
+        }
+
+        # Use a Session for cookie persistence if needed
+        with requests.Session() as session:
+            response = session.get(url, headers=headers, timeout=60, stream=True)
+            response.raise_for_status()
+
+            with open(local_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+        # Verify download succeeded
+        if local_path.stat().st_size == 0:
+            raise RuntimeError(f"下载文件为空或缺失: {url}")
+
+        multimodal_logger.info(f"✅ 下载完成: {local_path} ({local_path.stat().st_size} bytes)")
+        return local_path
+
+    except Exception as e:
+        multimodal_logger.error(f"❌ 下载失败{url}: {e}")
+        # Clean up partial file if it exists
+        if 'local_path' in locals() and local_path.exists():
+            try:
+                local_path.unlink()
+                multimodal_logger.debug(f"🗑️ 清理失败下载: {local_path}")
+            except:
+                pass
+        return None
 
 def image_to_data_url(image_path: str) -> str:
     with open(image_path, "rb") as f:
@@ -87,7 +159,7 @@ def extract_json_block(text: str) -> dict|None:
         except:
             return None
 
-def get_video_duration(path: str) -> int:
+def get_video_duration(path: str) -> float:
     """get the duration of a video"""
     try:
         cap = cv2.VideoCapture(path)
@@ -109,4 +181,6 @@ def format_timestamp(seconds: float) -> str:
 
 
 if __name__ == "__main__":
-     pass
+     download_file_from_url(
+         "https://imgs.design006.com/202204/Design006_8QGaeTCrEK.jpg",
+         "E:\Li_Tuo_work\multimodal_service\staging")
