@@ -30,6 +30,7 @@ class FootageSummary(BaseModel):
     """
     segments: list[FootageSegment] = Field(default=[])
     overall_summary: str = Field(default="", max_length=100)
+    duration: float = Field(default=0.0)
 
 # API response schema
 T = TypeVar("T")

@@ -1,6 +1,8 @@
 # Documents
 models
 logs
+video_footage
+images
 
 # Virtual environments (NEVER commit)
 .venv/

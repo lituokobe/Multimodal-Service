@@ -36,7 +36,7 @@ services:
     command: [ "/bin/bash", "/app/entrypoint.sh" ]
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8010/health" ]
-      interval: 30s
+      interval: 300s
       timeout: 20s
       retries: 3
       start_period: 600s

@@ -13,7 +13,8 @@ import torch
 from fastapi import FastAPI, HTTPException
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from config.constant_config import MAX_RETRY, IMAGE_SUMMARY_PROMPT, FOOTAGE_SUMMARY_PROMPT
+from config.constant_config import MAX_RETRY
+from functionals.prompts import IMAGE_SUMMARY_PROMPT, FOOTAGE_SUMMARY_PROMPT
 from config.path_config import MULTIMODAL_LLM_URL, STAGING_DIR
 from config.schema_config import ImageSummary, FootageSummary, SummarizeImageRequest, SummarizeFootageRequest, \
     APIResponse
@@ -193,7 +194,7 @@ async def summarize_footage(request: SummarizeFootageRequest) -> APIResponse[Foo
                 return APIResponse[FootageSummary].fail(e_m, error_code="LLM_INFERENCE_FAILED")
 
         return APIResponse.ok(
-            data=FootageSummary(**parsed_json)
+            data=FootageSummary(**parsed_json, duration=footage_duration)
         )
 
     except Exception as e:
