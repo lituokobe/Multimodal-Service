@@ -38,6 +38,11 @@ async def lifespan(app: FastAPI):
         api_key="empty",  # vLLM doesn't require auth for local deployment
         temperature=0,
         max_tokens=8192,  # max output tokens. Note: vLLM uses max_tokens, not max_completion_tokens
+        extra_body={
+            "chat_template_kwargs": {
+                "enable_thinking": False  # Directly passed to vLLM, following vLLM argument instruction
+            }
+        }
     )
 
     multimodal_logger.info(f"✅ Qwen3.5-9B 模型加载成功，耗时{time.time() - start:.2f}秒")
@@ -143,7 +148,7 @@ async def summarize_footage(request: SummarizeFootageRequest) -> APIResponse[Foo
             staged_file = STAGING_DIR / request.footage_path
 
         # ------ Create and validate footage path --------
-        if not staged_file.exists():
+        if (not staged_file) or (not staged_file.exists()):
             e_m = f"视频素材文件在容器的staging路径中不存在: {staged_file}"
             multimodal_logger.error(e_m)
             return APIResponse[FootageSummary].fail(e_m, error_code="FILE_NOT_FOUND")
@@ -229,10 +234,10 @@ if __name__ == "__main__":
 
     print("Test starts.")
 
-    # # video summary
-    # result1 = summarize_footage(SummarizeFootageRequest(footage_path=r"E:\Li_Tuo_work\multimodal_service\video_footage\229275_tiny.mp4"))
+    # video summary
+    # result1 = summarize_footage(SummarizeFootageRequest(footage_path=r"http://videovueapi.km360.cn/static/uploads/video/20260602/20260602163335_6a1e955f7a1c9.mp4"))
     # print(result1)
-    #
+
     # # image (design) summary
     # result2 = []
     # for img in [

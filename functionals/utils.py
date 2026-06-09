@@ -114,6 +114,9 @@ def extract_json_block(text: str) -> dict|None:
     :param text: output from multimodal model of interpreting a video footage
     :return: a structured JSON
     """
+    # Safety net: strip <think>...</think> blocks in case there is any
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
     # Strategy 1: Try direct json.loads first (if model outputs pure JSON)
     try:
         return json.loads(text.strip())
