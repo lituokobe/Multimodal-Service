@@ -3,6 +3,7 @@ models
 logs
 video_footage
 images
+PROJECT_DETAILS.md
 
 # Virtual environments (NEVER commit)
 .venv/
